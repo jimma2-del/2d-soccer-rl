@@ -36,7 +36,9 @@ while True:
     if keys[pygame.K_a]: move_x -= 1
     if keys[pygame.K_d]: move_x += 1
 
-    state = env.step(state, Action(move=jnp.array((move_y, move_x)), kick=0), 
+    kick = keys[pygame.K_SPACE]
+
+    state = env.step(state, Action(move=jnp.array((move_y, move_x)), kick=kick), 
         Action(move=jnp.array((0, 0)), kick=0))
 
     #print(state.left_player_pos)

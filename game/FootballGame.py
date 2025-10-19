@@ -49,22 +49,25 @@ class FootballGame:
 
     ZERO_VECTOR = jnp.zeros((2), dtype=jnp.float32)
 
-
     PLAYER_START_GOAL_DIST = 100
-    LEFT_PLAYER_START_POS = jnp.array((CENTER[0], FIELD_BOUNDS[0][1] + PLAYER_START_GOAL_DIST), dtype=jnp.float32)
-    RIGHT_PLAYER_START_POS = jnp.array((CENTER[0], FIELD_BOUNDS[1][1] - PLAYER_START_GOAL_DIST), dtype=jnp.float32)
+    LEFT_PLAYER_START_POS = jnp.array((CENTER[0]+1, FIELD_BOUNDS[0][1] + PLAYER_START_GOAL_DIST), dtype=jnp.float32)
+    RIGHT_PLAYER_START_POS = jnp.array((CENTER[0]-1, FIELD_BOUNDS[1][1] - PLAYER_START_GOAL_DIST), dtype=jnp.float32)
+        # adding a very small offset so x-coords don't line up perfectly and cause issues; temp fix
 
     BALL_START_POS = jnp.array(CENTER, dtype=jnp.float32)
 
-
-    PLAYER_ACCEL = 200
+    PLAYER_ACCEL = 450
 
     # percent velocity is reduced by per 1s; higher -> more friction
-    PLAYER_FRICTION_DAMPENING = 0.9
-    BALL_FRICTION_DAMPENING = 0.4
+    PLAYER_FRICTION_DAMPENING = 0.97
+    BALL_FRICTION_DAMPENING = 0.3
 
     BALL_MASS = 1
     PLAYER_MASS = 3
+
+    KICK_REACH = 5
+    KICK_TOTAL_RANGE = KICK_REACH + PLAYER_RADIUS + BALL_RADIUS
+    KICK_IMPULSE_VEL = 250
 
     def __init__(self, dt=0.1):
         self.DT = dt
@@ -83,25 +86,56 @@ class FootballGame:
             ball_vel=FootballGame.ZERO_VECTOR,
         )
 
+        # TODO: clipping issue; most easily recreatable from the perfectly aligned starting x-positions
+            # temp fix to add a very small offset to the starting positions; still other ways to clip though
+            # happens whenever the ball is squeezed between the players
+
     @functools.partial(jax.jit, static_argnames=('self'))
     def step(self, state: State, left_player_action: Action, right_player_action: Action) -> State:
-        # update velocities first, then positions (semi-implicit Euler method)
+        ### update velocities first, then positions (semi-implicit Euler method) ###
+
+        left_player_nvel = state.left_player_vel
+        right_player_nvel = state.right_player_vel
+        ball_nvel = state.ball_vel
+
+        left_player_move = left_player_action.move
+        right_player_move = right_player_action.move
 
         # prevent moving faster in diagonals
-        left_player_move = jnp.nan_to_num(left_player_action.move / jnp.linalg.norm(left_player_action.move))
-        right_player_move = jnp.nan_to_num(right_player_action.move / jnp.linalg.norm(right_player_action.move))
+        # left_player_move = jnp.nan_to_num(left_player_action.move / jnp.linalg.norm(left_player_action.move))
+        # right_player_move = jnp.nan_to_num(right_player_action.move / jnp.linalg.norm(right_player_action.move))
 
         # update player velocities based on movement actions
-        left_player_nvel = state.left_player_vel + left_player_move*FootballGame.PLAYER_ACCEL*self.DT
-        right_player_nvel = state.right_player_vel + right_player_move*FootballGame.PLAYER_ACCEL*self.DT
+        left_player_nvel += left_player_move*FootballGame.PLAYER_ACCEL*self.DT
+        right_player_nvel += right_player_move*FootballGame.PLAYER_ACCEL*self.DT
+
+        # apply kick TODO: fix double-kicking?
+        left_player_to_ball = state.ball_pos - state.left_player_pos
+        left_player_to_ball_dist = jnp.linalg.norm(left_player_to_ball)
+
+        ball_nvel += jax.lax.cond(
+            jnp.logical_and(left_player_action.kick, left_player_to_ball_dist <= FootballGame.KICK_TOTAL_RANGE), 
+            lambda: FootballGame.KICK_IMPULSE_VEL * left_player_to_ball / left_player_to_ball_dist, 
+            lambda: FootballGame.ZERO_VECTOR
+        )
+
+        right_player_to_ball = state.ball_pos - state.right_player_pos
+        right_player_to_ball_dist = jnp.linalg.norm(right_player_to_ball)
+
+        ball_nvel += jax.lax.cond(
+            jnp.logical_and(right_player_action.kick, right_player_to_ball_dist <= FootballGame.KICK_TOTAL_RANGE),
+            lambda: FootballGame.KICK_IMPULSE_VEL * right_player_to_ball / right_player_to_ball_dist, 
+            lambda: FootballGame.ZERO_VECTOR
+        )
 
         # apply friction, modelled as proportional to velocity (proportional to momentum for simplicity)
         left_player_nvel *= (1 - FootballGame.PLAYER_FRICTION_DAMPENING) ** self.DT
         right_player_nvel *= (1 - FootballGame.PLAYER_FRICTION_DAMPENING) ** self.DT
 
-        ball_nvel = state.ball_vel * (1 - FootballGame.BALL_FRICTION_DAMPENING)**self.DT
+        ball_nvel *= (1 - FootballGame.BALL_FRICTION_DAMPENING) ** self.DT
 
-        # update state with new velocities
+        ### update state with new velocities ###
+
         state = dataclasses.replace(state,
             left_player_vel=left_player_nvel,
             right_player_vel=right_player_nvel,
@@ -248,7 +282,8 @@ class FootballGame:
 
             return coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2)
 
-        return jax.lax.cond(i == j, lambda: jnp.inf, f)
+        return jax.lax.cond(i == j, # make group system; matrix of bools for whether to check collision
+            lambda: jnp.inf, f)
 
     @staticmethod
     @functools.partial(jax.vmap, in_axes=(0, 0, None))
