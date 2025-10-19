@@ -57,7 +57,14 @@ class FootballGame:
     BALL_START_POS = jnp.array(CENTER, dtype=jnp.float32)
 
 
-    PLAYER_ACCEL = 30
+    PLAYER_ACCEL = 200
+
+    # percent velocity is reduced by per 1s; higher -> more friction
+    PLAYER_FRICTION_DAMPENING = 0.9
+    BALL_FRICTION_DAMPENING = 0.4
+
+    BALL_MASS = 1
+    PLAYER_MASS = 3
 
     def __init__(self, dt=0.1):
         self.DT = dt
@@ -66,6 +73,7 @@ class FootballGame:
     def reset(self) -> State:
         return State(
             left_player_pos=FootballGame.LEFT_PLAYER_START_POS,
+            #left_player_pos=FootballGame.GOALPOST_TL_POS + jnp.array([50,0]),
             left_player_vel=FootballGame.ZERO_VECTOR,
 
             right_player_pos=FootballGame.RIGHT_PLAYER_START_POS,
@@ -77,11 +85,27 @@ class FootballGame:
 
     @functools.partial(jax.jit, static_argnames=('self'))
     def step(self, state: State, left_player_action: Action, right_player_action: Action) -> State:
-
         # update velocities first, then positions (semi-implicit Euler method)
+
+        # prevent moving faster in diagonals
+        left_player_move = jnp.nan_to_num(left_player_action.move / jnp.linalg.norm(left_player_action.move))
+        right_player_move = jnp.nan_to_num(right_player_action.move / jnp.linalg.norm(right_player_action.move))
+
+        # update player velocities based on movement actions
+        left_player_nvel = state.left_player_vel + left_player_move*FootballGame.PLAYER_ACCEL*self.DT
+        right_player_nvel = state.right_player_vel + right_player_move*FootballGame.PLAYER_ACCEL*self.DT
+
+        # apply friction, modelled as proportional to velocity (proportional to momentum for simplicity)
+        left_player_nvel *= (1 - FootballGame.PLAYER_FRICTION_DAMPENING) ** self.DT
+        right_player_nvel *= (1 - FootballGame.PLAYER_FRICTION_DAMPENING) ** self.DT
+
+        ball_nvel = state.ball_vel * (1 - FootballGame.BALL_FRICTION_DAMPENING)**self.DT
+
+        # update state with new velocities
         state = dataclasses.replace(state,
-            left_player_vel=state.left_player_vel + left_player_action.move*FootballGame.PLAYER_ACCEL*self.DT,
-            right_player_vel=state.right_player_vel + right_player_action.move*FootballGame.PLAYER_ACCEL*self.DT
+            left_player_vel=left_player_nvel,
+            right_player_vel=right_player_nvel,
+            ball_vel=ball_nvel
         )
 
         # update positions
@@ -93,84 +117,165 @@ class FootballGame:
     def _physics_step(self, state: State) -> State:
 
         positions = jnp.array((
-            FootballGame.GOALPOST_TL_POS,
-            FootballGame.GOALPOST_BL_POS,
-            FootballGame.GOALPOST_TR_POS,
-            FootballGame.GOALPOST_BR_POS,
-
-            state.left_player_pos,
-            state.right_player_pos,
-
-            state.ball_pos
+            FootballGame.GOALPOST_TL_POS, FootballGame.GOALPOST_BL_POS, # goalposts
+                FootballGame.GOALPOST_TR_POS, FootballGame.GOALPOST_BR_POS,
+            state.left_player_pos, state.right_player_pos, # players
+            state.ball_pos # ball
         ), dtype=jnp.float32)
 
         velocities = jnp.array((
-            FootballGame.ZERO_VECTOR,
-            FootballGame.ZERO_VECTOR,
-            FootballGame.ZERO_VECTOR,
-            FootballGame.ZERO_VECTOR,
-
-            state.left_player_vel,
-            state.right_player_vel,
-
-            state.ball_vel
+            FootballGame.ZERO_VECTOR, FootballGame.ZERO_VECTOR, # goalposts
+                FootballGame.ZERO_VECTOR, FootballGame.ZERO_VECTOR,
+            state.left_player_vel, state.right_player_vel, # players
+            state.ball_vel # ball
         ), dtype=jnp.float32)
 
         radii = jnp.array((
-            FootballGame.GOALPOST_RADIUS,
-            FootballGame.GOALPOST_RADIUS,
-            FootballGame.GOALPOST_RADIUS,
-            FootballGame.GOALPOST_RADIUS,
-
-            FootballGame.PLAYER_RADIUS,
-            FootballGame.PLAYER_RADIUS,
-
-            FootballGame.BALL_RADIUS,
+            FootballGame.GOALPOST_RADIUS, FootballGame.GOALPOST_RADIUS, # goalposts
+                FootballGame.GOALPOST_RADIUS, FootballGame.GOALPOST_RADIUS,
+            FootballGame.PLAYER_RADIUS, FootballGame.PLAYER_RADIUS, # players
+            FootballGame.BALL_RADIUS, # ball
         ), dtype=jnp.int32)
 
-        # masses = jnp.array((
+        masses = jnp.array((
+            jnp.inf, jnp.inf, jnp.inf, jnp.inf, # goalposts
+            FootballGame.PLAYER_MASS, FootballGame.PLAYER_MASS, # players
+            FootballGame.BALL_MASS # ball
+        ), dtype=jnp.float32)
 
-        # ), dtype=jnp.int32)
+        colliders = [ positions, velocities, radii, masses ]
+        COLLIDER_IS = jnp.arange(len(colliders[0])) # static
 
-        circle_colliders = ( positions, velocities, radii )
+        # calculate matrix of collision times between every collider
 
-        # filter list of indexes (of circle_colliders) of colliders that are moving
-        moving_is = jnp.arange(len(circle_colliders[0]))[velocities != FootballGame.ZERO_VECTOR]
+        coll_t_matrix = jax.vmap(
+            lambda cur_i, colliders: jax.vmap(
+                FootballGame._calc_coll_t, 
+                in_axes=(0, None, None)
+            )(COLLIDER_IS, cur_i, colliders),
+            
+            in_axes=(0, None)
+        )(COLLIDER_IS, colliders)
 
-        # generate indexes of pairs between all and moving colliders
-        pairs_all_is, pairs_moving_is_is = jnp.triu_indices(n=len(circle_colliders[0]), m=len(moving_is))
-        pairs_moving_is = moving_is[pairs_moving_is_is]
+        # iterate: 
+        #   - find overall first collision, 
+        #   - update positions of all objects to time of min(moment of collision, dt); update cur_t
 
-        pairs_all = [ ele[pairs_all_is] for ele in circle_colliders ]
-        pairs_moving = [ ele[pairs_moving_is] for ele in circle_colliders ]
+        #   - if cur_t > DT, no more collisions in time interval -> finished, BREAK
+ 
+        #      ELSE:
+        #   - update velocity of both colliding objects using collision
+        #   - update collision times of other objects with the 2 colliding objects 
+        #       -> in case position/velocity update of cur colliding objects changes another collision
+        #      REPEAT
 
-        coll_ts = FootballGame.get_coll_t(pairs_all, pairs_moving)
+        EPSILON = 0.0001 # stop clipping
 
-        min_t_pairs_i = jnp.argmin(coll_ts)
-        min_t = coll_ts[min_t_pairs_i]
-        min_t_i = pairs_moving_is[min_t_pairs_i]
+        def find_first_coll_and_npos(cur_t, coll_t_matrix, colliders):
+             # find the overall first (min time) collision; focus on this collsion in this iteration
+            collider_is = jnp.unravel_index(jnp.argmin(coll_t_matrix), coll_t_matrix.shape)
+            coll_t = coll_t_matrix[collider_is]
 
-        @functools.partial(jax.lax.while_loop, cond=lambda min_t, *_: min_t >= self.DT,
-            init_val=(min_t, min_t_i, circle_colliders, moving_is))
-        def f(min_t, min_t_i, circle_colliders, moving_is):
-            min_t_collider = [ ele[min_t_i] for ele in circle_colliders ]
-
-            coll_ts = FootballGame.get_coll_t(circle_colliders, pairs_moving)
-
+            # return updated position of all colliders to time of min(moment of collision, dt)
+            return collider_is, coll_t, FootballGame._calc_new_collider_positions(
+                colliders[0], # collider positions
+                colliders[1], # collider velocities
+                jnp.minimum(coll_t, self.DT) - cur_t # time to update by (dt of cur iteration)
+                    - EPSILON # ensure that objects are not colliding after update; slightly apart
+            )
         
-        min_t >= self.DT # finished
+        def handle_collision(collider_is, coll_t_matrix, colliders):
+            # update the 2 collision objects' velocities
+            n_vels = FootballGame._calc_collision_response_velocities(
+                [ ele[collider_is[0]] for ele in colliders ], 
+                [ ele[collider_is[1]] for ele in colliders ]
+            )
 
+            colliders[1] = colliders[1].at[collider_is, ].set(n_vels)
 
-        return state
+            # update collision times of other objects with the 2 colliding objects 
+            for i in range(2):
+                n_coll_ts = jax.vmap(
+                    FootballGame._calc_coll_t, 
+                    in_axes=(0, None, None)
+                )(COLLIDER_IS, collider_is[i], colliders)
+
+                coll_t_matrix = coll_t_matrix.at[collider_is[i], :].set(n_coll_ts)
+                coll_t_matrix = coll_t_matrix.at[:, collider_is[i]].set(n_coll_ts)
+
+            return coll_t_matrix, colliders 
+
+        collider_is, coll_t, colliders[0] = find_first_coll_and_npos(0, coll_t_matrix, colliders)
+            # cur_t starts at 0; nothing has been done yet
+
+        # jax.debug.breakpoint()
+
+        def collision_iteration(carry):
+            collider_is, cur_t, coll_t_matrix, colliders = carry
+
+            #jax.debug.print("goalpost={pos1} player={pos2}", pos1=colliders[0][0], pos2=colliders[0][4])
+
+            coll_t_matrix, colliders = handle_collision(collider_is, coll_t_matrix, colliders)
+            collider_is, coll_t, colliders[0] = find_first_coll_and_npos(cur_t, coll_t_matrix, colliders)
+
+            return collider_is, coll_t, coll_t_matrix, colliders 
+
+        _, _, _, colliders = jax.lax.while_loop(
+            cond_fun=lambda carry: carry[1] < self.DT, # when cur_t >= DT, all objects updated to DT -> done
+            body_fun=collision_iteration,
+            init_val=(collider_is, coll_t, coll_t_matrix, colliders)
+        )
+
+        return State(
+            left_player_pos=colliders[0][4],
+            left_player_vel=colliders[1][4],
+
+            right_player_pos=colliders[0][5],
+            right_player_vel=colliders[1][5],
+
+            ball_pos=colliders[0][6],
+            ball_vel=colliders[1][6],
+        )
 
     @staticmethod
-    @jax.vmap
-    def get_coll_t(circle1, circle2):
-        pos1, vel1, radius1 = circle1
-        pos2, vel2, radius2 = circle2
+    def _calc_coll_t(i, j, colliders):
+        def f():
+            collider1 = [ ele[i] for ele in colliders ]
+            collider2 = [ ele[j] for ele in colliders ]
 
-        return coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2)
+            pos1, vel1, radius1, _ = collider1
+            pos2, vel2, radius2, _ = collider2
 
+            return coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2)
+
+        return jax.lax.cond(i == j, lambda: jnp.inf, f)
+
+    @staticmethod
+    @functools.partial(jax.vmap, in_axes=(0, 0, None))
+    def _calc_new_collider_positions(position, velocity, dt):
+        return position + velocity*dt
+
+    @staticmethod
+    def _calc_collision_response_velocities(collider1, collider2):
+        pos1, vel1, _, mass1 = collider1
+        pos2, vel2, _, mass2 = collider2
+
+        dpos = pos1 - pos2
+        dvel = vel1 - vel2
+
+        dvel_proj_onto_dpos = jnp.dot(dpos, dvel) / jnp.dot(dpos, dpos) * dpos
+        mass_sum = mass1 + mass2
+
+        # infinity / infinity results in NaN; proper limit should be 1 in this case
+        mass1_proportion = jnp.nan_to_num(mass1 / mass_sum, nan=1)
+        mass2_proportion = jnp.nan_to_num(mass2 / mass_sum, nan=1)
+
+        nvel1 = vel1 - 2 * mass2_proportion * dvel_proj_onto_dpos
+        nvel2 = vel2 + 2 * mass1_proportion * dvel_proj_onto_dpos
+
+        # jax.debug.print("collision response vels: {v1}, {v2}", v1=nvel1, v2=nvel2)
+
+        return nvel1, nvel2
 
     ### RENDERING ###
 
@@ -208,6 +313,7 @@ class FootballGame:
         image = FootballGame.BACKGROUND_IMAGE
     
         # add white outline when a player is kicking?
+            # size of kick range
 
         # players
         image = draw_circle(image, *jnp.rint(state.left_player_pos).astype(int), FootballGame.PLAYER_RADIUS, FootballGame.LEFT_TEAM_COLOR)

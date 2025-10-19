@@ -39,11 +39,11 @@ while True:
     state = env.step(state, Action(move=jnp.array((move_y, move_x)), kick=0), 
         Action(move=jnp.array((0, 0)), kick=0))
 
+    #print(state.left_player_pos)
+
     image_array = np.array(env.render(state))
     pygame_surface = pygame.surfarray.make_surface(image_array.swapaxes(0,1))
     screen.blit(pygame_surface, (0,0))
     pygame.display.flip()
 
     clock.tick(FPS)
-
-    break

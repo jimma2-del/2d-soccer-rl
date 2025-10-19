@@ -40,17 +40,20 @@ def coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2):
     dvel_squared = jnp.dot(dvel, dvel)
 
     discriminant = dvel_squared * coll_dist**2 - jnp.cross(dvel, dpos)**2
-    # no real solutions if discriminant < 0; make collision times infinity
-    discriminant = jnp.where(discriminant < 0, jnp.inf, discriminant) 
 
-    discr_sqrt = jnp.sqrt(discriminant)
-    mid = -jnp.dot(dpos, dvel)
+    def f():
+        discr_sqrt = jnp.sqrt(discriminant)
+        mid = -jnp.dot(dpos, dvel)
 
-    t1 = (mid - discr_sqrt) / dvel_squared
-    t2 = (mid + discr_sqrt) / dvel_squared
+        t1 = (mid - discr_sqrt) / dvel_squared
 
-    # invalidate collision time (set to infinty) if negative
-    t1 = jnp.where(t1 < 0, jnp.inf, t1)
-    t2 = jnp.where(t2 < 0, jnp.inf, t2)
+        def g(): # if t1 invalid, check if t2 is valid and return if so, otherwise infinity
+            t2 = (mid + discr_sqrt) / dvel_squared
+            return jnp.where(t2 < 0, jnp.inf, t2)
 
-    return jnp.minimum(t1, t2) # choose earliest collision time
+        # if t1 >= 0, it is valid -> earliest collision time
+        return jax.lax.cond(t1 > 0, lambda: t1, g)
+
+    # no real solutions if discriminant < 0; return infinity as the time
+        # <= is used instead of < to avoid situations when dvel=0, resulting in NaN
+    return jax.lax.cond(discriminant <= 0, lambda: jnp.inf, f)
