@@ -31,10 +31,10 @@ while True:
 
     keys = pygame.key.get_pressed()
         
-    if keys[pygame.K_w]: move_y -= 1
-    if keys[pygame.K_s]: move_y += 1
-    if keys[pygame.K_a]: move_x -= 1
-    if keys[pygame.K_d]: move_x += 1
+    if keys[pygame.K_w] or keys[pygame.K_UP]: move_y -= 1
+    if keys[pygame.K_s] or keys[pygame.K_DOWN]: move_y += 1
+    if keys[pygame.K_a] or keys[pygame.K_LEFT]: move_x -= 1
+    if keys[pygame.K_d] or keys[pygame.K_RIGHT]: move_x += 1
 
     kick = keys[pygame.K_SPACE]
 

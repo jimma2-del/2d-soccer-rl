@@ -1,9 +1,8 @@
-import cv2
 import jax.numpy as jnp
 import jax
 import numpy as np
 
-from FootballGame import FootballGame
+from FootballGame import FootballGame, Action
 
 @jax.jit
 def test():
@@ -12,9 +11,13 @@ def test():
 
     def f(carry, _):
         image = env.render(carry)
-        return env.step(carry), jnp.sum(image.flatten())
+        return env.step(
+            carry, 
+            Action(move=jnp.array((0, 1)), kick=0),
+            Action(move=jnp.array((0, -1)), kick=0)
+        ), jnp.sum(image.flatten())
 
-    state, data = jax.lax.scan(f, state, (), length=1)
+    state, data = jax.lax.scan(f, state, (), length=10000)
 
     image = env.render(state)
     return image, data
@@ -22,14 +25,11 @@ def test():
 import time
 start_time = time.time()
 
-image, data = test()
+with jax.log_compiles():
+    image, data = test()
+
 print(data)
 
 print(time.time() - start_time)
 
-WINDOW_NAME = "Game"
-
-cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
-cv2.imshow(WINDOW_NAME, np.array(image))
-
-cv2.waitKey()
+print(image)

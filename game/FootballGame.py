@@ -24,6 +24,14 @@ class Action:
     kick: chex.Array # 0=no kick, 1=kick
 
 class FootballGame:
+    # matrix indicating whether to ignore (not check) collisions 
+        # between members of the 2 groups; should be diagonally symmetrical
+    COLLIDER_GROUP_IGNORE_COLLISIONS = jnp.array((
+        ( True, False, False ),
+        ( False, False, False ),
+        ( False, False, False )
+    ), dtype=jnp.bool)
+    
     FIELD_SIZE = (500, 1000) # height, width
     EXTRA_RADIUS = 100
 
@@ -177,7 +185,13 @@ class FootballGame:
             FootballGame.BALL_MASS # ball
         ), dtype=jnp.float32)
 
-        colliders = [ positions, velocities, radii, masses ]
+        groups = jnp.array(( # determines whether to check collisions between objects
+            0, 0, 0, 0, # goalposts
+            1, 1, # players
+            2 # ball
+        ), dtype=jnp.int8)
+
+        colliders = [ positions, velocities, radii, masses, groups ]
         COLLIDER_IS = jnp.arange(len(colliders[0])) # static
 
         # calculate matrix of collision times between every collider
@@ -277,12 +291,15 @@ class FootballGame:
             collider1 = [ ele[i] for ele in colliders ]
             collider2 = [ ele[j] for ele in colliders ]
 
-            pos1, vel1, radius1, _ = collider1
-            pos2, vel2, radius2, _ = collider2
+            pos1, vel1, radius1, *_ = collider1
+            pos2, vel2, radius2, *_ = collider2
 
             return coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2)
 
-        return jax.lax.cond(i == j, # make group system; matrix of bools for whether to check collision
+        # don't check collision if 
+        return jax.lax.cond(jnp.logical_or(i == j, # colliders are the same
+                # collider groups do not check collision between each other
+                FootballGame.COLLIDER_GROUP_IGNORE_COLLISIONS[colliders[4][i]][colliders[4][j]]), 
             lambda: jnp.inf, f)
 
     @staticmethod
@@ -292,8 +309,8 @@ class FootballGame:
 
     @staticmethod
     def _calc_collision_response_velocities(collider1, collider2):
-        pos1, vel1, _, mass1 = collider1
-        pos2, vel2, _, mass2 = collider2
+        pos1, vel1, _, mass1, *_ = collider1
+        pos2, vel2, _, mass2, *_ = collider2
 
         dpos = pos1 - pos2
         dvel = vel1 - vel2
