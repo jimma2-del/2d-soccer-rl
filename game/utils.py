@@ -68,18 +68,16 @@ def coll_time_line_moving_circle(line, circle_pos, vel, radius):
     
     line_dir_cross_vel = jnp.cross(line_dir, vel)
     line_dir_cross_dpos = jnp.cross(line_dir, circle_pos - line_p1)
-    plus_minus = radius * jnp.sqrt(jnp.dot(line_dir, line_dir))
 
-    t1 = (-plus_minus - line_dir_cross_dpos) / line_dir_cross_vel
+    mid = - line_dir_cross_dpos / line_dir_cross_vel
+    plus_minus = jnp.abs(radius * jnp.sqrt(jnp.dot(line_dir, line_dir)) / line_dir_cross_vel)
 
-    def f(): # if t1 invalid, check if t2 is valid and return if so, otherwise infinity
-        t2 = (plus_minus - line_dir_cross_dpos) / line_dir_cross_vel
-        return jnp.where(t2 < 0, jnp.inf, t2)
+    t1 = mid - plus_minus
+    t2 = mid + plus_minus
 
-    # if t1 >= 0, it is valid -> earliest collision time
-    result = jax.lax.cond(t1 >= 0, lambda: t1, f)
-    
-    #jax.debug.print("Line Coll Time: {result}", result=result)
+    # if t1 >= 0, it is valid -> earliest collision time; else check t2; else infinity
+    result = jnp.where(t1 >= 0, t1, jnp.where(t2 >= 0, t2, jnp.inf))
+    #jax.debug.print("t1={t1} t2={t2}", t1=t1, t2=t2)
     #jax.debug.print("line={line} pos={pos} vel={vel} r={r}", line=line, pos=circle_pos, vel=vel, r=radius)
     
     return result

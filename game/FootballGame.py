@@ -25,17 +25,17 @@ class Action:
     kick: chex.Array # 0=no kick, 1=kick
 
 class FootballGame:
-    # matrix indicating whether to ignore (not check) collisions 
-        # between members of the 2 groups; should be diagonally symmetrical
-        # groups: disabled, goalposts, players, ball, inner walls, outer walls
-            # NOTE: group 0 ignores collisions with everything -> collider disabled
-    COLLIDER_GROUP_IGNORE_COLLISIONS = jnp.array((
-        ( True,  True,  True,  True,  True,  True  ),
-        ( True,  True,  False, False, True,  True  ),
-        ( True,  False, False, False, True,  False ),
-        ( True,  False, False, False, False, True  ),
-        ( True,  True,  True,  False, True,  True  ),
-        ( True,  True,  False, True,  True,  True  )
+    # matrix indicating whether to check collisions between members of the 2 groups 
+        # should be diagonally symmetrical
+    # groups: disabled, goalposts, players, ball, inner walls, outer walls
+        # NOTE: group 0 does not check collisions with anything -> collider disabled
+    COLLIDER_GROUP_CHECK_COLLISIONS = jnp.array((
+        ( False, False, False, False, False, False ),
+        ( False, False, True,  True,  False, False ),
+        ( False, True,  True,  True,  False, True  ),
+        ( False, True,  True,  True,  True,  False ),
+        ( False, False, False, True,  False, False ),
+        ( False, False, True,  False, False, False )
     ), dtype=jnp.bool)
     
     FIELD_SIZE = (500, 1000) # height, width
@@ -192,11 +192,13 @@ class FootballGame:
 
         groups = jnp.array(( # determines whether to check collisions between objects
             1, 1, 1, 1, # goalposts
-            2, 0, # players
+            2, 2, # players
             3 # ball
         ), dtype=jnp.int8)
 
-        return [ positions, velocities, masses, radii, groups ]
+        circle_colliders = [ positions, velocities, masses, radii, groups ]
+
+        return circle_colliders #[ ele[4:5] for ele in circle_colliders ]
     
     @staticmethod
     @jax.jit
@@ -230,29 +232,24 @@ class FootballGame:
         ), dtype=jnp.int32)
 
         line_groups = jnp.array(( # determines whether to check collisions between objects
-            0, 0, 0, 0, # field (inner, ball) walls
-            0, 0, 0, 0 # window (outer, player) walls
+            4, 4, 4, 4, # field (inner, ball) walls
+            5, 5, 5, 5 # window (outer, player) walls
         ), dtype=jnp.int8)
 
-        return ( line_p1s, line_p2s, line_groups )
+        line_colliders = ( line_p1s, line_p2s, line_groups )
+
+        return line_colliders #[ ele[4:5] for ele in line_colliders ]
     
     LINE_COLLIDERS = None # initilized later, immediately after class declaration
 
     @functools.partial(jax.jit, static_argnames=('self'))
     def _physics_step(self, state: State) -> State:
-        circle_colliders = self._make_circle_colliders(state);
-        COLLIDER_IS = jnp.arange(len(circle_colliders[0]) + len(FootballGame.LINE_COLLIDERS[0])) # static
+        circle_colliders = self._make_circle_colliders(state)
+        CIRCLE_COLLIDER_IS = jnp.arange(len(circle_colliders[0])) # static
 
-        # calculate matrix of collision times between every collider
-
-        coll_t_matrix = jax.vmap(
-            lambda cur_i, circle_colliders: jax.vmap(
-                FootballGame._calc_coll_t, 
-                in_axes=(0, None, None)
-            )(COLLIDER_IS, cur_i, circle_colliders),
-            
-            in_axes=(0, None)
-        )(COLLIDER_IS, circle_colliders)
+        # calculate matrix of collision times between every circle collider and every collider
+        coll_t_matrix = jax.vmap(FootballGame.calc_circle_coll_ts, in_axes=(0, None))(
+            CIRCLE_COLLIDER_IS, circle_colliders)
 
         # iterate: 
         #   - find overall first collision, 
@@ -286,8 +283,6 @@ class FootballGame:
             )
         
         def handle_collision(collider_is, coll_t_matrix, circle_colliders):
-            jax.debug.print("collision: {collider_is}", collider_is=collider_is)
-
             # colliders are either 2 circles, or circle and line
 
             # first collider is always a circle
@@ -307,27 +302,28 @@ class FootballGame:
             # update the 2 collision objects' velocities
             n_vels = FootballGame._calc_collision_response_velocities(collider1, collider2)
 
+            # jax.debug.print("collision: {collider_is} coll_t={coll_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
+            #     collider_is=collider_is, coll_t=coll_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
+
             circle_colliders[1] = circle_colliders[1].at[collider_is[0]].set(n_vels[0])
             circle_colliders[1] = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),
                 lambda: circle_colliders[1].at[collider_is[1]].set(n_vels[1]), lambda: circle_colliders[1])
                 # update second collider's velocity if not a line
 
             # update collision times of other objects with the 2 colliding objects 
-            def update_collision_times(i, coll_t_matrix):
-                n_coll_ts = jax.vmap(
-                    FootballGame._calc_coll_t, 
-                    in_axes=(0, None, None)
-                )(COLLIDER_IS, collider_is[i], circle_colliders)
+            def update_collision_times(collider_i, coll_t_matrix):
+                n_coll_ts = FootballGame.calc_circle_coll_ts(collider_i, circle_colliders)
 
-                coll_t_matrix = coll_t_matrix.at[collider_is[i], :].set(n_coll_ts)
-                coll_t_matrix = coll_t_matrix.at[:, collider_is[i]].set(n_coll_ts)
+                coll_t_matrix = coll_t_matrix.at[collider_i, :].set(n_coll_ts)
+                coll_t_matrix = coll_t_matrix.at[:, collider_i].set(n_coll_ts[:len(circle_colliders[0])])
 
                 return coll_t_matrix
             
-            coll_t_matrix = update_collision_times(0, coll_t_matrix)
+            coll_t_matrix = update_collision_times(collider_is[0], coll_t_matrix)
             coll_t_matrix = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),
-                lambda: update_collision_times(1, coll_t_matrix), lambda: coll_t_matrix)
-                # update second collider's collisions if not a line
+                lambda: update_collision_times(collider_is[1], coll_t_matrix), lambda: coll_t_matrix)
+                # update second collider's collisions if not a line 
+                    # NOTE: vmapped cond executes both branches; this is fine since no errors are thrown
 
             return coll_t_matrix, circle_colliders 
 
@@ -364,45 +360,64 @@ class FootballGame:
         )
 
     @staticmethod
-    def _calc_coll_t(i, j, circle_colliders):
-        # put i and j in order
-        collider_is = jnp.array((i, j))
-        i, j = jnp.min(collider_is), jnp.max(collider_is)
+    def calc_circle_coll_ts(i, circle_colliders):
+        '''Find the time of collision for the circle collider at the given index 
+        with all other colliders.'''
+
+        CIRCLE_COLLIDER_IS = jnp.arange(len(circle_colliders[0])) # static
+        LINE_COLLIDER_IS = jnp.arange(len(FootballGame.LINE_COLLIDERS[0])) # static
+
+        circle_coll_ts = jax.vmap(
+            FootballGame._calc_circle_circle_coll_t, 
+            in_axes=(None, 0, None)
+        )(i, CIRCLE_COLLIDER_IS, circle_colliders)
+
+        line_coll_ts = jax.vmap(
+            FootballGame._calc_circle_line_coll_t, 
+            in_axes=(None, 0, None)
+        )(i, LINE_COLLIDER_IS, circle_colliders)
+
+        return jnp.concat((circle_coll_ts, line_coll_ts))
+
+    @staticmethod
+    def _calc_circle_circle_coll_t(i, j, circle_colliders):
 
         def f():
             collider1 = [ ele[i] for ele in circle_colliders ]
             pos1, vel1, _, radius1, *_ = collider1
 
-            def handle_circles():
-                collider2 = [ ele[j] for ele in circle_colliders ]
-                pos2, vel2, _, radius2, *_ = collider2
-                return coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2)
-            
-            def handle_circle_line():
-                collider2 = [ ele[j - len(circle_colliders[0])] for ele in FootballGame.LINE_COLLIDERS ]
-                return coll_time_line_moving_circle(collider2, pos1, vel1, radius1)
-            
-            # line-line collision should already have been ignored by the group system
-                # if there is a line, it has to be j since collider_is are sorted
-            
-            return jax.lax.cond(j < len(circle_colliders[0]), handle_circles, handle_circle_line)
+            collider2 = [ ele[j] for ele in circle_colliders ]
+            pos2, vel2, _, radius2, *_ = collider2
 
-        group1 = jax.lax.cond(i < len(circle_colliders[0]), 
-            lambda: circle_colliders[4][i], lambda: FootballGame.LINE_COLLIDERS[2][i-len(circle_colliders[0])])
-        group2 = jax.lax.cond(j < len(circle_colliders[0]), 
-            lambda: circle_colliders[4][j], lambda: FootballGame.LINE_COLLIDERS[2][j-len(circle_colliders[0])])
-        
-        #jax.debug.print("i={i} group1={group1}", i=i, group1=group1)
-        # jax.debug.print("i={i} j={j} ignore={ignore}", i=i, j=j,
-        #     ignore=jnp.logical_or(i == j, FootballGame.COLLIDER_GROUP_IGNORE_COLLISIONS[group1][group2]))
+            return coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2)
 
-        # don't check collision if 
-        return jax.lax.cond(jnp.logical_or(i == j, # colliders are the same
-                # collider groups do not check collision between each other
-                FootballGame.COLLIDER_GROUP_IGNORE_COLLISIONS[group1][group2]), 
-            lambda: jnp.inf, f)
+        group1 = circle_colliders[4][i]
+        group2 = circle_colliders[4][j]
+
+        # only check collision if
+        return jax.lax.cond(jnp.logical_and(i != j, # colliders are not the same
+                # collider groups check collision between each other
+                FootballGame.COLLIDER_GROUP_CHECK_COLLISIONS[group1][group2]), 
+            f, lambda: jnp.inf) # NOTE: vmap in jax does not support cond; executes both branches
     
-        # NOTE: vmap in jax does not support cond; it executes both branches
+    @staticmethod
+    def _calc_circle_line_coll_t(circle_i, line_i, circle_colliders):
+        # NOTE: can result in infinite loops if colliders get too close and get stuck
+        # NOTE: can result in objects getting stuck inside the wall
+
+        def f():
+            collider1 = [ ele[circle_i] for ele in circle_colliders ]
+            pos1, vel1, _, radius1, *_ = collider1
+            
+            collider2 = [ ele[line_i] for ele in FootballGame.LINE_COLLIDERS ]
+            return coll_time_line_moving_circle(collider2, pos1, vel1, radius1)
+
+        circle_group = circle_colliders[4][circle_i]
+        line_group = FootballGame.LINE_COLLIDERS[2][line_i]
+
+        # only check collision if collider groups check collision between each other
+        return jax.lax.cond(FootballGame.COLLIDER_GROUP_CHECK_COLLISIONS[circle_group][line_group], 
+            f, lambda: jnp.inf) # NOTE: vmap in jax does not support cond; executes both branches
 
     @staticmethod
     @functools.partial(jax.vmap, in_axes=(0, 0, None))
