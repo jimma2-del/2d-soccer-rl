@@ -52,8 +52,47 @@ def coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2):
             return jnp.where(t2 < 0, jnp.inf, t2)
 
         # if t1 >= 0, it is valid -> earliest collision time
-        return jax.lax.cond(t1 > 0, lambda: t1, g)
+        return jax.lax.cond(t1 >= 0, lambda: t1, g)
 
     # no real solutions if discriminant < 0; return infinity as the time
         # <= is used instead of < to avoid situations when dvel=0, resulting in NaN
     return jax.lax.cond(discriminant <= 0, lambda: jnp.inf, f)
+
+@jax.jit
+def coll_time_line_moving_circle(line, circle_pos, vel, radius):
+    '''Returns the earliest future collision time of stationary line and moving circle.
+    Does not handle collisions with endpoints properly; combine with circle colliders on endpoints (r=0)'''
+    
+    line_p1, line_p2, *_ = line
+    line_dir = line_p2 - line_p1
+    
+    line_dir_cross_vel = jnp.cross(line_dir, vel)
+    line_dir_cross_dpos = jnp.cross(line_dir, circle_pos - line_p1)
+    plus_minus = radius * jnp.sqrt(jnp.dot(line_dir, line_dir))
+
+    t1 = (-plus_minus - line_dir_cross_dpos) / line_dir_cross_vel
+
+    def f(): # if t1 invalid, check if t2 is valid and return if so, otherwise infinity
+        t2 = (plus_minus - line_dir_cross_dpos) / line_dir_cross_vel
+        return jnp.where(t2 < 0, jnp.inf, t2)
+
+    # if t1 >= 0, it is valid -> earliest collision time
+    result = jax.lax.cond(t1 >= 0, lambda: t1, f)
+    
+    #jax.debug.print("Line Coll Time: {result}", result=result)
+    #jax.debug.print("line={line} pos={pos} vel={vel} r={r}", line=line, pos=circle_pos, vel=vel, r=radius)
+    
+    return result
+
+    # TODO: make lines not infinite
+
+@jax.jit
+def closest_point_on_line(point, line):
+    '''Returns the closest point on the line from the given point.
+    Treats lines as infinite; does not clip to between endpoints.'''
+    
+    line_p1, line_p2, *_ = line
+    line_dir = line_p2 - line_p1
+
+    return jnp.dot(line_dir, point - line_p1) / jnp.dot(line_dir, line_dir) * line_dir \
+        + line_p1 # project vector from p1 to point onto line dir; add to p1
