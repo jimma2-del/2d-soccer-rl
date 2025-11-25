@@ -43,7 +43,7 @@ while True:
 
     #print(state.left_player_pos)
 
-    image_array = np.array(env.render(state))
+    image_array = np.array(env.render(state, kick, False))
     pygame_surface = pygame.surfarray.make_surface(image_array.swapaxes(0,1))
     screen.blit(pygame_surface, (0,0))
     pygame.display.flip()

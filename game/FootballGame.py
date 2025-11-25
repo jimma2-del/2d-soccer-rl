@@ -83,7 +83,8 @@ class FootballGame:
     PLAYER_MASS = 3
 
     KICK_REACH = 5
-    KICK_TOTAL_RANGE = KICK_REACH + PLAYER_RADIUS + BALL_RADIUS
+    KICK_TOTAL_RANGE = KICK_REACH + PLAYER_RADIUS
+    KICK_TOTAL_RANGE_WITH_BALL = KICK_TOTAL_RANGE + BALL_RADIUS
     KICK_IMPULSE_VEL = 250
 
     # percent velocity is reduced by upon each collision; prevents infinite loops
@@ -134,7 +135,7 @@ class FootballGame:
         left_player_to_ball_dist = jnp.linalg.norm(left_player_to_ball)
 
         ball_nvel += jax.lax.cond(
-            jnp.logical_and(left_player_action.kick, left_player_to_ball_dist <= FootballGame.KICK_TOTAL_RANGE), 
+            jnp.logical_and(left_player_action.kick, left_player_to_ball_dist <= FootballGame.KICK_TOTAL_RANGE_WITH_BALL), 
             lambda: FootballGame.KICK_IMPULSE_VEL * left_player_to_ball / left_player_to_ball_dist, 
             lambda: FootballGame.ZERO_VECTOR
         )
@@ -143,7 +144,7 @@ class FootballGame:
         right_player_to_ball_dist = jnp.linalg.norm(right_player_to_ball)
 
         ball_nvel += jax.lax.cond(
-            jnp.logical_and(right_player_action.kick, right_player_to_ball_dist <= FootballGame.KICK_TOTAL_RANGE),
+            jnp.logical_and(right_player_action.kick, right_player_to_ball_dist <= FootballGame.KICK_TOTAL_RANGE_WITH_BALL),
             lambda: FootballGame.KICK_IMPULSE_VEL * right_player_to_ball / right_player_to_ball_dist, 
             lambda: FootballGame.ZERO_VECTOR
         )
@@ -495,11 +496,19 @@ class FootballGame:
     BACKGROUND_IMAGE = None # initilized later, immediately after class declaration
 
     @functools.partial(jax.jit, static_argnames=('self'))
-    def render(self, state: State) -> chex.Array:
+    def render(self, state: State, left_player_kicking=0, right_player_kicking=0) -> chex.Array:
         image = FootballGame.BACKGROUND_IMAGE
     
-        # add white outline when a player is kicking?
-            # size of kick range
+        # white outline when a player is kicking, size of kick range
+        image = jax.lax.cond(left_player_kicking, 
+            lambda: draw_circle(image, *jnp.rint(state.left_player_pos).astype(int), FootballGame.KICK_TOTAL_RANGE, FootballGame.BALL_COLOR),
+            lambda: image
+        )
+        
+        image = jax.lax.cond(right_player_kicking, 
+            lambda: draw_circle(image, *jnp.rint(state.right_player_pos).astype(int), FootballGame.KICK_TOTAL_RANGE, FootballGame.BALL_COLOR),
+            lambda: image
+        )
 
         # players
         image = draw_circle(image, *jnp.rint(state.left_player_pos).astype(int), FootballGame.PLAYER_RADIUS, FootballGame.LEFT_TEAM_COLOR)
