@@ -163,10 +163,24 @@ class FootballGame:
             ball_vel=ball_nvel
         )
 
-        # update positions
+        ### update positions ###
         state = self._physics_step(state)
 
-        return state
+
+        # check for goal
+        goal = 0 # -1=went in left goal; +1=went in right goal
+
+        height_between_goalposts = jnp.logical_and(
+            state.ball_pos[0] >= FootballGame.GOALPOST_Y1,
+            state.ball_pos[0] <= FootballGame.GOALPOST_Y2
+        )
+
+        goal -= jnp.logical_and(height_between_goalposts,
+            state.ball_pos[1] < FootballGame.FIELD_BOUNDS[0][1] - FootballGame.BALL_RADIUS)
+        goal += jnp.logical_and(height_between_goalposts,
+            state.ball_pos[1] > FootballGame.FIELD_BOUNDS[1][1] + FootballGame.BALL_RADIUS)
+
+        return state, goal
     
     @functools.partial(jax.jit, static_argnames=('self'))
     def _make_circle_colliders(self, state: State):
@@ -213,10 +227,10 @@ class FootballGame:
         line_p1s = jnp.array((
             # field (inner, ball) walls
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[0][1]),
-            (FootballGame.GOALPOST_BL_POS[0], FootballGame.FIELD_BOUNDS[0][1]),
+            (FootballGame.GOALPOST_Y2, FootballGame.FIELD_BOUNDS[0][1]),
 
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[1][1]),
-            (FootballGame.GOALPOST_BR_POS[0], FootballGame.FIELD_BOUNDS[1][1]),
+            (FootballGame.GOALPOST_Y2, FootballGame.FIELD_BOUNDS[1][1]),
 
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[0][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[0][1]),
@@ -230,10 +244,10 @@ class FootballGame:
 
         line_p2s = jnp.array((
             # field (inner, ball) walls
-            (FootballGame.GOALPOST_TL_POS[0], FootballGame.FIELD_BOUNDS[0][1]),
+            (FootballGame.GOALPOST_Y1, FootballGame.FIELD_BOUNDS[0][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[0][1]),
 
-            (FootballGame.GOALPOST_TR_POS[0], FootballGame.FIELD_BOUNDS[1][1]),
+            (FootballGame.GOALPOST_Y1, FootballGame.FIELD_BOUNDS[1][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[1][1]),
 
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[1][1]),
