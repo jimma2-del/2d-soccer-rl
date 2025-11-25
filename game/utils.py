@@ -60,7 +60,7 @@ def coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2):
 
 @jax.jit
 def coll_time_line_moving_circle(line, circle_pos, vel, radius):
-    '''Returns the earliest future collision time of stationary line and moving circle.
+    '''Returns the earliest future collision time of a stationary line segment and a moving circle.
     Does not handle collisions with endpoints properly; combine with circle colliders on endpoints (r=0)'''
     
     line_p1, line_p2, *_ = line
@@ -79,6 +79,16 @@ def coll_time_line_moving_circle(line, circle_pos, vel, radius):
     result = jnp.where(t1 >= 0, t1, jnp.where(t2 >= 0, t2, jnp.inf))
     #jax.debug.print("t1={t1} t2={t2}", t1=t1, t2=t2)
     #jax.debug.print("line={line} pos={pos} vel={vel} r={r}", line=line, pos=circle_pos, vel=vel, r=radius)
+
+    # check if collision point is on the line segment; if not, no collision
+    circle_coll_pos = circle_pos + result * vel
+    line_coll_pos = closest_point_on_line(circle_coll_pos, line)
+
+    line_mins = jnp.minimum(line_p1, line_p2)
+    line_maxes = jnp.maximum(line_p1, line_p2)
+    on_line_segment = jnp.all(jnp.logical_and(line_coll_pos >= line_mins, line_coll_pos <= line_maxes))
+
+    result = jnp.where(on_line_segment, result, jnp.inf)
     
     return result
 

@@ -64,9 +64,12 @@ class FootballGame:
     ZERO_VECTOR = jnp.zeros((2), dtype=jnp.float32)
 
     PLAYER_START_GOAL_DIST = 100
-    LEFT_PLAYER_START_POS = jnp.array((CENTER[0]+1, FIELD_BOUNDS[0][1] + PLAYER_START_GOAL_DIST), dtype=jnp.float32)
-    RIGHT_PLAYER_START_POS = jnp.array((CENTER[0]-1, FIELD_BOUNDS[1][1] - PLAYER_START_GOAL_DIST), dtype=jnp.float32)
+    #LEFT_PLAYER_START_POS = jnp.array((CENTER[0]+1, FIELD_BOUNDS[0][1] + PLAYER_START_GOAL_DIST), dtype=jnp.float32)
+    #RIGHT_PLAYER_START_POS = jnp.array((CENTER[0]-1, FIELD_BOUNDS[1][1] - PLAYER_START_GOAL_DIST), dtype=jnp.float32)
         # adding a very small offset so x-coords don't line up perfectly and cause issues; temp fix
+
+    LEFT_PLAYER_START_POS = jnp.array((CENTER[0], FIELD_BOUNDS[0][1] + PLAYER_START_GOAL_DIST), dtype=jnp.float32)
+    RIGHT_PLAYER_START_POS = jnp.array((CENTER[0], FIELD_BOUNDS[1][1] - PLAYER_START_GOAL_DIST), dtype=jnp.float32)
 
     BALL_START_POS = jnp.array(CENTER, dtype=jnp.float32)
 
@@ -82,6 +85,9 @@ class FootballGame:
     KICK_REACH = 5
     KICK_TOTAL_RANGE = KICK_REACH + PLAYER_RADIUS + BALL_RADIUS
     KICK_IMPULSE_VEL = 250
+
+    # percent velocity is reduced by upon each collision; prevents infinite loops
+    COLLISION_DAMPENING = 0.1
 
     def __init__(self, dt=0.1):
         self.DT = dt
@@ -206,7 +212,11 @@ class FootballGame:
         line_p1s = jnp.array((
             # field (inner, ball) walls
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[0][1]),
+            (FootballGame.GOALPOST_BL_POS[0], FootballGame.FIELD_BOUNDS[0][1]),
+
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[1][1]),
+            (FootballGame.GOALPOST_BR_POS[0], FootballGame.FIELD_BOUNDS[1][1]),
+
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[0][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[0][1]),
 
@@ -219,8 +229,12 @@ class FootballGame:
 
         line_p2s = jnp.array((
             # field (inner, ball) walls
+            (FootballGame.GOALPOST_TL_POS[0], FootballGame.FIELD_BOUNDS[0][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[0][1]),
+
+            (FootballGame.GOALPOST_TR_POS[0], FootballGame.FIELD_BOUNDS[1][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[1][1]),
+
             (FootballGame.FIELD_BOUNDS[0][0], FootballGame.FIELD_BOUNDS[1][1]),
             (FootballGame.FIELD_BOUNDS[1][0], FootballGame.FIELD_BOUNDS[1][1]),
 
@@ -232,7 +246,7 @@ class FootballGame:
         ), dtype=jnp.int32)
 
         line_groups = jnp.array(( # determines whether to check collisions between objects
-            4, 4, 4, 4, # field (inner, ball) walls
+            4, 4, 4, 4, 4, 4, # field (inner, ball) walls
             5, 5, 5, 5 # window (outer, player) walls
         ), dtype=jnp.int8)
 
@@ -302,8 +316,8 @@ class FootballGame:
             # update the 2 collision objects' velocities
             n_vels = FootballGame._calc_collision_response_velocities(collider1, collider2)
 
-            # jax.debug.print("collision: {collider_is} coll_t={coll_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
-            #     collider_is=collider_is, coll_t=coll_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
+            jax.debug.print("collision: {collider_is} coll_t={coll_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
+                collider_is=collider_is, coll_t=coll_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
 
             circle_colliders[1] = circle_colliders[1].at[collider_is[0]].set(n_vels[0])
             circle_colliders[1] = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),
@@ -441,6 +455,9 @@ class FootballGame:
 
         nvel1 = vel1 - 2 * mass2_proportion * dvel_proj_onto_dpos
         nvel2 = vel2 + 2 * mass1_proportion * dvel_proj_onto_dpos
+
+        nvel1 *= 1 - FootballGame.COLLISION_DAMPENING
+        nvel2 *= 1 - FootballGame.COLLISION_DAMPENING
 
         # jax.debug.print("collision response vels: {v1}, {v2}", v1=nvel1, v2=nvel2)
 
