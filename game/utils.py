@@ -49,10 +49,10 @@ def coll_time_moving_circle_circle(pos1, vel1, radius1, pos2, vel2, radius2):
 
         def g(): # if t1 invalid, check if t2 is valid and return if so, otherwise infinity
             t2 = (mid + discr_sqrt) / dvel_squared
-            return jnp.where(t2 < 0, jnp.inf, t2)
+            return jnp.where(t2 > 0, t2, jnp.inf)
 
         # if t1 >= 0, it is valid -> earliest collision time
-        return jax.lax.cond(t1 >= 0, lambda: t1, g)
+        return jax.lax.cond(t1 > 0, lambda: t1, g)
 
     # no real solutions if discriminant < 0; return infinity as the time
         # <= is used instead of < to avoid situations when dvel=0, resulting in NaN
@@ -76,7 +76,11 @@ def coll_time_line_moving_circle(line, circle_pos, vel, radius):
     t2 = mid + plus_minus
 
     # if t1 >= 0, it is valid -> earliest collision time; else check t2; else infinity
-    result = jnp.where(t1 >= 0, t1, jnp.where(t2 >= 0, t2, jnp.inf))
+    result = jnp.where(t1 > 0, t1, jnp.where(t2 > 0, t2, jnp.inf))
+        # NOTE: idk how but sometimes result is exactly 0, which leads to an infinite loop
+            # happens sometimes when player pushes another player into a wall
+            # > instead of >= fixes this; but why?
+
     #jax.debug.print("t1={t1} t2={t2}", t1=t1, t2=t2)
     #jax.debug.print("line={line} pos={pos} vel={vel} r={r}", line=line, pos=circle_pos, vel=vel, r=radius)
 

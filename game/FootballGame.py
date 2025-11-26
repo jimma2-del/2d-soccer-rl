@@ -104,7 +104,7 @@ class FootballGame:
             right_player_vel=FootballGame.ZERO_VECTOR,
 
             ball_pos=FootballGame.BALL_START_POS,
-            ball_vel=FootballGame.ZERO_VECTOR,
+            ball_vel=jnp.array((0,0))#FootballGame.ZERO_VECTOR,
         )
 
         # TODO: clipping issue; most easily recreatable from the perfectly aligned starting x-positions
@@ -292,7 +292,7 @@ class FootballGame:
         #       -> in case position/velocity update of cur colliding objects changes another collision
         #      REPEAT
 
-        EPSILON = 0.0001 # stop clipping
+        EPSILON = 0.00001 # stop clipping
 
         def find_first_coll_and_npos(cur_t, coll_t_matrix, circle_colliders):
             # find the overall first (min time) collision; focus on this collsion in this iteration
@@ -300,18 +300,18 @@ class FootballGame:
             coll_t = coll_t_matrix[collider_is]
 
             # put lower i (circle) 1st and higher i (possibly line) 2nd to allow separate processing of lines
-            collider_is = jnp.array(collider_is)
-            collider_is = jnp.array(( jnp.min(collider_is), jnp.max(collider_is) ))
+            # collider_is = jnp.array(collider_is)
+            # collider_is = jnp.array(( jnp.min(collider_is), jnp.max(collider_is) ))
 
             # return updated position of all circle colliders to time of min(moment of collision, dt)
             return collider_is, coll_t, FootballGame._calc_new_collider_positions(
                 circle_colliders[0], # collider positions
                 circle_colliders[1], # collider velocities
-                jnp.minimum(coll_t, self.DT) - cur_t # time to update by (dt of cur iteration)
-                    - EPSILON # ensure that objects are not colliding after update; slightly apart
+                jnp.maximum(0, jnp.minimum(coll_t - EPSILON, self.DT) - cur_t) # time to update by (dt of cur iteration)
+                    # subtract epsilon to ensure that objects are not colliding after update -> slightly apart
             )
         
-        def handle_collision(collider_is, coll_t_matrix, circle_colliders):
+        def handle_collision(cur_t, collider_is, coll_t_matrix, circle_colliders):
             # colliders are either 2 circles, or circle and line
 
             # first collider is always a circle
@@ -331,8 +331,8 @@ class FootballGame:
             # update the 2 collision objects' velocities
             n_vels = FootballGame._calc_collision_response_velocities(collider1, collider2)
 
-            jax.debug.print("collision: {collider_is} coll_t={coll_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
-                collider_is=collider_is, coll_t=coll_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
+            jax.debug.print("collision: {collider_is} t={cur_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
+                collider_is=jnp.array(collider_is), cur_t=cur_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
 
             circle_colliders[1] = circle_colliders[1].at[collider_is[0]].set(n_vels[0])
             circle_colliders[1] = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),
@@ -340,17 +340,17 @@ class FootballGame:
                 # update second collider's velocity if not a line
 
             # update collision times of other objects with the 2 colliding objects 
-            def update_collision_times(collider_i, coll_t_matrix):
-                n_coll_ts = FootballGame.calc_circle_coll_ts(collider_i, circle_colliders)
+            def update_collision_times(collider_i, cur_t, coll_t_matrix):
+                n_coll_ts = FootballGame.calc_circle_coll_ts(collider_i, circle_colliders) + cur_t
 
                 coll_t_matrix = coll_t_matrix.at[collider_i, :].set(n_coll_ts)
                 coll_t_matrix = coll_t_matrix.at[:, collider_i].set(n_coll_ts[:len(circle_colliders[0])])
 
                 return coll_t_matrix
             
-            coll_t_matrix = update_collision_times(collider_is[0], coll_t_matrix)
+            coll_t_matrix = update_collision_times(collider_is[0], cur_t, coll_t_matrix)
             coll_t_matrix = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),
-                lambda: update_collision_times(collider_is[1], coll_t_matrix), lambda: coll_t_matrix)
+                lambda: update_collision_times(collider_is[1], cur_t, coll_t_matrix), lambda: coll_t_matrix)
                 # update second collider's collisions if not a line 
                     # NOTE: vmapped cond executes both branches; this is fine since no errors are thrown
 
@@ -366,7 +366,7 @@ class FootballGame:
 
             #jax.debug.print("goalpost={pos1} player={pos2}", pos1=colliders[0][0], pos2=colliders[0][4])
 
-            coll_t_matrix, circle_colliders = handle_collision(collider_is, coll_t_matrix, circle_colliders)
+            coll_t_matrix, circle_colliders = handle_collision(cur_t, collider_is, coll_t_matrix, circle_colliders)
             collider_is, coll_t, circle_colliders[0] = find_first_coll_and_npos(cur_t, coll_t_matrix, circle_colliders)
 
             return collider_is, coll_t, coll_t_matrix, circle_colliders 
@@ -431,8 +431,7 @@ class FootballGame:
     
     @staticmethod
     def _calc_circle_line_coll_t(circle_i, line_i, circle_colliders):
-        # NOTE: can result in infinite loops if colliders get too close and get stuck
-        # NOTE: can result in objects getting stuck inside the wall
+        # NOTE: infinite loop bug when pushed into wall by another circle; fixed?
 
         def f():
             collider1 = [ ele[circle_i] for ele in circle_colliders ]
@@ -468,11 +467,24 @@ class FootballGame:
         mass1_proportion = jnp.nan_to_num(mass1 / mass_sum, nan=1)
         mass2_proportion = jnp.nan_to_num(mass2 / mass_sum, nan=1)
 
-        nvel1 = vel1 - 2 * mass2_proportion * dvel_proj_onto_dpos
-        nvel2 = vel2 + 2 * mass1_proportion * dvel_proj_onto_dpos
+        vel_change1 = 2 * mass2_proportion * dvel_proj_onto_dpos
+        vel_change2 = 2 * mass1_proportion * dvel_proj_onto_dpos
 
+        # nvel1 = vel1 - vel_change1
+        # nvel2 = vel2 + vel_change2
+
+        # apply velocity in direction going away from other collider; prevents getting stuck
+        nvel1 = vel1 + jnp.sign(dpos)*jnp.abs(vel_change1)
+        nvel2 = vel2 - jnp.sign(dpos)*jnp.abs(vel_change2)
+
+        # damping of velocity; simulates energy lost & helps prevent infinite loops
         nvel1 *= 1 - FootballGame.COLLISION_DAMPENING
         nvel2 *= 1 - FootballGame.COLLISION_DAMPENING
+
+        # round small values to zero to prevent infinite loops
+        EPSILON = 0.0001
+        nvel1 = jnp.where(jnp.abs(nvel1) < EPSILON, 0, nvel1)
+        nvel2 = jnp.where(jnp.abs(nvel2) < EPSILON, 0, nvel2)
 
         # jax.debug.print("collision response vels: {v1}, {v2}", v1=nvel1, v2=nvel2)
 

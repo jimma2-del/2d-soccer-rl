@@ -31,18 +31,18 @@ while True:
 
     keys = pygame.key.get_pressed()
         
-    if keys[pygame.K_w]: left_player_move_y -= 1
-    if keys[pygame.K_s]: left_player_move_y += 1
-    if keys[pygame.K_a]: left_player_move_x -= 1
-    if keys[pygame.K_d]: left_player_move_x += 1
+    if keys[pygame.K_e]: left_player_move_y -= 1
+    if keys[pygame.K_d]: left_player_move_y += 1
+    if keys[pygame.K_s]: left_player_move_x -= 1
+    if keys[pygame.K_f]: left_player_move_x += 1
 
-    if keys[pygame.K_UP]: right_player_move_y -= 1
-    if keys[pygame.K_DOWN]: right_player_move_y += 1
-    if keys[pygame.K_LEFT]: right_player_move_x -= 1
-    if keys[pygame.K_RIGHT]: right_player_move_x += 1
+    if keys[pygame.K_p]: right_player_move_y -= 1
+    if keys[pygame.K_SEMICOLON]: right_player_move_y += 1
+    if keys[pygame.K_l]: right_player_move_x -= 1
+    if keys[pygame.K_QUOTE]: right_player_move_x += 1
 
-    left_player_kick = keys[pygame.K_LSHIFT] or keys[pygame.K_SPACE]
-    right_player_kick = keys[pygame.K_KP0]
+    left_player_kick = keys[pygame.K_LSHIFT] #or keys[pygame.K_SPACE]
+    right_player_kick = keys[pygame.K_RSHIFT]
 
     if goal == 0:
         state, goal = env.step(state, 
