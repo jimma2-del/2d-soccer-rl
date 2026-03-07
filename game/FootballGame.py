@@ -79,7 +79,7 @@ class FootballGame:
     PLAYER_FRICTION_DAMPENING = 0.97
     BALL_FRICTION_DAMPENING = 0.3
 
-    BALL_MASS = 1
+    BALL_MASS = 5#1
     PLAYER_MASS = 3
 
     KICK_REACH = 5
@@ -331,8 +331,8 @@ class FootballGame:
             # update the 2 collision objects' velocities
             n_vels = FootballGame._calc_collision_response_velocities(collider1, collider2)
 
-            jax.debug.print("collision: {collider_is} t={cur_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
-                collider_is=jnp.array(collider_is), cur_t=cur_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
+            # jax.debug.print("collision: {collider_is} t={cur_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
+            #     collider_is=jnp.array(collider_is), cur_t=cur_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
 
             circle_colliders[1] = circle_colliders[1].at[collider_is[0]].set(n_vels[0])
             circle_colliders[1] = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),

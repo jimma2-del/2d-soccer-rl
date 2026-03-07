@@ -7,11 +7,15 @@ from FootballGame import FootballGame, Action
 import pygame, sys
 pygame.init()
 
+print("CONTROLS")
+print("Player 1: E S D F to Move, SHIFT to Kick")
+print("Player 1: O K L SEMICOLON to Move, RIGHT-SHIFT to Kick")
+
 DT = 0.1
 FPS = round(1/DT)
 clock = pygame.time.Clock()
 
-pygame.display.set_caption("Game")
+pygame.display.set_caption("2D Football Game")
 screen = pygame.display.set_mode((FootballGame.WINDOW_SIZE[1], FootballGame.WINDOW_SIZE[0]))
 
 env = FootballGame(dt=DT)
