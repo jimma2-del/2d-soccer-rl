@@ -15,12 +15,12 @@ DT = 0.1
 FPS = round(1/DT)
 clock = pygame.time.Clock()
 
-pygame.display.set_caption("2D Football Game")
-screen = pygame.display.set_mode((FootballGame.WINDOW_SIZE[1], FootballGame.WINDOW_SIZE[0]))
-
 env = FootballGame(dt=DT)
 state = env.reset()
 goal = 0
+
+pygame.display.set_caption("2D Football Game")
+screen = pygame.display.set_mode((env._cached_consts.window_size[1], env._cached_consts.window_size[0]))
 
 while True:
     left_player_move_y = 0
