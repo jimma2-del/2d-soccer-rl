@@ -10,47 +10,50 @@ from utils import draw_circle, coll_time_moving_circle_circle, \
 
 @dataclass(frozen=True)
 class State:
-    left_player_pos: chex.Array
-    left_player_vel: chex.Array
-
-    right_player_pos: chex.Array
-    right_player_vel: chex.Array
-
     ball_pos: chex.Array
     ball_vel: chex.Array
 
+    # vectorized; axis 0 is the player index (for multiple players on the same team)
+    left_player_pos: chex.Array
+    left_player_vel: chex.Array
+    right_player_pos: chex.Array
+    right_player_vel: chex.Array
+
 @dataclass(frozen=True)
 class Action:
+    # each field is vectorized; axis 0 is the player index (for multiple players on the same team)
     move: chex.Array # (y: int -1 to 1, x: int -1 to 1)
     kick: chex.Array # 0=no kick, 1=kick
 
 @dataclass(frozen=True)
 class Settings:
-    field_size = (500, 1000) # height, width
-    field_padding = 100
+    field_size: tuple[int, int] = (500, 1000) # height, width
+    field_padding: int = 100
 
-    ball_radius = 10
-    player_radius = 15
+    ball_radius: int = 10
+    player_radius: int = 15
 
-    goal_width = 200
-    goalpost_radius = 10
+    goal_width: int = 200
+    goalpost_radius: int = 10
 
-    player_start_dist_from_goal = 100
+    player_start_dist_from_center: int = 200
 
-    player_accel = 450
+    player_accel: float = 450
 
     # percent velocity is reduced by per 1s; higher -> more friction
-    player_friction_dampening = 0.97
-    ball_friction_dampening = 0.3
+    player_friction_dampening: float = 0.97
+    ball_friction_dampening: float = 0.3
 
-    ball_mass = 1#5#1
-    player_mass = 3
+    ball_mass: float = 1#5#1
+    player_mass: float = 3
 
-    kick_reach = 5
-    kick_impulse_vel = 250
+    kick_reach: float = 5
+    kick_impulse_vel: float = 250
 
     # percent velocity is reduced by upon each collision; prevents infinite loops
-    collision_dampening = 0.1
+    collision_dampening: float = 0.1
+
+    players_per_team: int = 2
 
 @dataclass(frozen=True)
 class RenderSettings:
@@ -97,8 +100,8 @@ class FootballGame:
         left_player_start_pos: chex.Array = None
         right_player_start_pos: chex.Array = None
         ball_start_pos: chex.Array = None
-        kick_total_range: int = None
-        kick_total_range_with_ball: int = None
+        kick_total_range: float = None
+        kick_total_range_with_ball: float = None
 
         line_colliders: tuple[chex.Array, chex.Array, chex.Array] = None
 
@@ -141,17 +144,23 @@ class FootballGame:
         self._cached_consts.goalpost_br_pos = jnp.array(
             (self._cached_consts.goalpost_y2, self._cached_consts.field_bounds[1][1]), dtype=jnp.int32)
 
-        # previous temp fix: adding a very small offset so x-coords don't line up perfectly and cause issues
+        # previous temp fix: adding a very small y offset to starting positions
+            # so y-coords don't line up perfectly and cause issues
 
-        self._cached_consts.left_player_start_pos = jnp.array((
-            self._cached_consts.center[0], 
-            self._cached_consts.field_bounds[0][1] + self._settings.player_start_dist_from_goal
-        ), dtype=jnp.float32)
+        player_start_y_gap = self._settings.field_size[0] / (self._settings.players_per_team + 1)
 
-        self._cached_consts.right_player_start_pos = jnp.array((
-            self._cached_consts.center[0], 
-            self._cached_consts.field_bounds[1][1] - self._settings.player_start_dist_from_goal
-        ), dtype=jnp.float32)
+        left_player_start_x = self._cached_consts.center[1] - self._settings.player_start_dist_from_center
+        right_player_start_x = self._cached_consts.center[1] + self._settings.player_start_dist_from_center
+
+        self._cached_consts.left_player_start_pos = jnp.array([(
+            self._cached_consts.field_bounds[0][0] + (i + 1)*player_start_y_gap, 
+            left_player_start_x
+        ) for i in range(self._settings.players_per_team) ], dtype=jnp.float32)
+
+        self._cached_consts.right_player_start_pos = jnp.array([(
+            self._cached_consts.field_bounds[0][0] + (i + 1)*player_start_y_gap, 
+            right_player_start_x
+        ) for i in range(self._settings.players_per_team) ], dtype=jnp.float32)
 
         self._cached_consts.ball_start_pos = jnp.array(self._cached_consts.center, dtype=jnp.float32)
 
@@ -173,11 +182,10 @@ class FootballGame:
     def reset(self) -> State:
         return State(
             left_player_pos=self._cached_consts.left_player_start_pos,
-            #left_player_pos=FootballGame.GOALPOST_TL_POS + jnp.array([50,0]),
-            left_player_vel=FootballGame.ZERO_VECTOR,
+            left_player_vel=jnp.zeros((self._settings.players_per_team, 2), dtype=jnp.float32),
 
             right_player_pos=self._cached_consts.right_player_start_pos,
-            right_player_vel=FootballGame.ZERO_VECTOR,
+            right_player_vel=jnp.zeros((self._settings.players_per_team, 2), dtype=jnp.float32),
 
             ball_pos=self._cached_consts.ball_start_pos,
             ball_vel=jnp.array((0,0))#FootballGame.ZERO_VECTOR,
@@ -195,8 +203,8 @@ class FootballGame:
         right_player_nvel = state.right_player_vel
         ball_nvel = state.ball_vel
 
-        left_player_move = left_player_action.move
-        right_player_move = right_player_action.move
+        left_player_move = jnp.clip(left_player_action.move, -1, 1)
+        right_player_move = jnp.clip(right_player_action.move, -1, 1)
 
         # prevent moving faster in diagonals
         # left_player_move = jnp.nan_to_num(left_player_action.move / jnp.linalg.norm(left_player_action.move))
@@ -207,25 +215,18 @@ class FootballGame:
         right_player_nvel += right_player_move*self._settings.player_accel*self.DT
 
         # apply kick TODO: fix double-kicking?
-        left_player_to_ball = state.ball_pos - state.left_player_pos
-        left_player_to_ball_dist = jnp.linalg.norm(left_player_to_ball)
+        @functools.partial(jax.vmap, in_axes=(0, 0, None))
+        def calc_kick_impulse_vel(kick, player_pos, ball_pos):
+            player_to_ball = ball_pos - player_pos
+            player_to_ball_dist = jnp.linalg.norm(player_to_ball)
 
-        ball_nvel += jax.lax.cond(
-            jnp.logical_and(left_player_action.kick, left_player_to_ball_dist 
-                            <= self._cached_consts.kick_total_range_with_ball), 
-            lambda: self._settings.kick_impulse_vel * left_player_to_ball / left_player_to_ball_dist, 
-            lambda: FootballGame.ZERO_VECTOR
-        )
+            apply_kick = jnp.logical_and(kick, player_to_ball_dist <= self._cached_consts.kick_total_range_with_ball)
+            kick_impulse_vel = self._settings.kick_impulse_vel * player_to_ball / player_to_ball_dist
 
-        right_player_to_ball = state.ball_pos - state.right_player_pos
-        right_player_to_ball_dist = jnp.linalg.norm(right_player_to_ball)
-
-        ball_nvel += jax.lax.cond(
-            jnp.logical_and(right_player_action.kick, right_player_to_ball_dist 
-                            <= self._cached_consts.kick_total_range_with_ball),
-            lambda: self._settings.kick_impulse_vel * right_player_to_ball / right_player_to_ball_dist, 
-            lambda: FootballGame.ZERO_VECTOR
-        )
+            return apply_kick * kick_impulse_vel
+        
+        ball_nvel += jnp.sum(calc_kick_impulse_vel(left_player_action.kick, state.left_player_pos, state.ball_pos), axis=0)
+        ball_nvel += jnp.sum(calc_kick_impulse_vel(right_player_action.kick, state.right_player_pos, state.ball_pos), axis=0)
 
         # apply friction, modelled as proportional to velocity (proportional to momentum for simplicity)
         left_player_nvel *= (1 - self._settings.player_friction_dampening) ** self.DT
@@ -262,36 +263,32 @@ class FootballGame:
     
     @functools.partial(jax.jit, static_argnames=('self'))
     def _make_circle_colliders(self, state: State):
-        positions = jnp.array((
-            self._cached_consts.goalpost_tl_pos, self._cached_consts.goalpost_bl_pos, # goalposts
-                self._cached_consts.goalpost_tr_pos, self._cached_consts.goalpost_br_pos,
-            state.left_player_pos, state.right_player_pos, # players
-            state.ball_pos # ball
-        ), dtype=jnp.float32)
+        goalpost_pos = jnp.vstack((self._cached_consts.goalpost_tl_pos,
+            self._cached_consts.goalpost_bl_pos, self._cached_consts.goalpost_tr_pos, self._cached_consts.goalpost_br_pos))
+            # static
 
-        velocities = jnp.array((
-            FootballGame.ZERO_VECTOR, FootballGame.ZERO_VECTOR, # goalposts
-                FootballGame.ZERO_VECTOR, FootballGame.ZERO_VECTOR,
-            state.left_player_vel, state.right_player_vel, # players
-            state.ball_vel # ball
-        ), dtype=jnp.float32)
+        positions = jnp.vstack((goalpost_pos, state.left_player_pos, state.right_player_pos, state.ball_pos ))
+
+        goalpost_vels = jnp.zeros((4, 2), dtype=jnp.float32) # static
+        velocities = jnp.vstack(( goalpost_vels, state.left_player_vel, state.right_player_vel, state.ball_vel ))
+
+        ### static elements ##
 
         masses = jnp.array((
-            jnp.inf, jnp.inf, jnp.inf, jnp.inf, # goalposts
-            self._settings.player_mass, self._settings.player_mass, # players
+            *([jnp.inf] * 4), # goalposts
+            *([self._settings.player_mass] * (2*self._settings.players_per_team)), # players
             self._settings.ball_mass # ball
         ), dtype=jnp.float32)
 
         radii = jnp.array((
-            self._settings.goalpost_radius, self._settings.goalpost_radius, # goalposts
-                self._settings.goalpost_radius, self._settings.goalpost_radius,
-            self._settings.player_radius, self._settings.player_radius, # players
-            self._settings.ball_radius, # ball
+            *([self._settings.goalpost_radius] * 4), # goalposts
+            *([self._settings.player_radius] * (2*self._settings.players_per_team)), # players
+            self._settings.ball_radius # ball
         ), dtype=jnp.int32)
 
         groups = jnp.array(( # determines whether to check collisions between objects
-            1, 1, 1, 1, # goalposts
-            2, 2, # players
+            *([1] * 4), # goalposts
+            *([2] * (2*self._settings.players_per_team)), # players
             3 # ball
         ), dtype=jnp.int8)
 
@@ -350,6 +347,8 @@ class FootballGame:
     def _physics_step(self, state: State) -> State:
         circle_colliders = self._make_circle_colliders(state)
         CIRCLE_COLLIDER_IS = jnp.arange(len(circle_colliders[0])) # static
+
+        # jax.debug.print("p2: pos={pos} vel={vel}", pos=circle_colliders[0][5], vel=circle_colliders[1][5], ordered=True)
 
         # calculate matrix of collision times between every circle collider and every collider
         coll_t_matrix = jax.vmap(FootballGame._calc_circle_coll_ts, in_axes=(0, None, None))(
@@ -413,7 +412,7 @@ class FootballGame:
             )
 
             # jax.debug.print("collision: {collider_is} t={cur_t} n_vel1={n_vel1} n_vel2={n_vel2}", 
-            #     collider_is=jnp.array(collider_is), cur_t=cur_t, n_vel1=n_vels[0], n_vel2=n_vels[1])
+            #     collider_is=jnp.array(collider_is), cur_t=cur_t, n_vel1=n_vels[0], n_vel2=n_vels[1], ordered=True)
 
             circle_colliders[1] = circle_colliders[1].at[collider_is[0]].set(n_vels[0])
             circle_colliders[1] = jax.lax.cond(collider_is[1] < len(circle_colliders[0]),
@@ -459,15 +458,21 @@ class FootballGame:
             init_val=(collider_is, coll_t, coll_t_matrix, circle_colliders)
         )
 
+        # static
+        left_player_start_i = 4
+        right_player_start_i = left_player_start_i + self._settings.players_per_team
+        players_end_i = right_player_start_i + self._settings.players_per_team
+
+
         return State(
-            left_player_pos=circle_colliders[0][4],
-            left_player_vel=circle_colliders[1][4],
+            left_player_pos=circle_colliders[0][left_player_start_i:right_player_start_i],
+            left_player_vel=circle_colliders[1][left_player_start_i:right_player_start_i],
 
-            right_player_pos=circle_colliders[0][5],
-            right_player_vel=circle_colliders[1][5],
+            right_player_pos=circle_colliders[0][right_player_start_i:players_end_i],
+            right_player_vel=circle_colliders[1][right_player_start_i:players_end_i],
 
-            ball_pos=circle_colliders[0][6],
-            ball_vel=circle_colliders[1][6],
+            ball_pos=circle_colliders[0][players_end_i],
+            ball_vel=circle_colliders[1][players_end_i],
         )
 
     @staticmethod
@@ -611,27 +616,31 @@ class FootballGame:
         return image
 
     @functools.partial(jax.jit, static_argnames=('self'))
-    def render(self, state: State, left_player_kicking=0, right_player_kicking=0) -> chex.Array:
-        image = self._cached_background_image
-    
-        # white outline when a player is kicking, size of kick range
-        image = jax.lax.cond(left_player_kicking, 
-            lambda: draw_circle(image, *jnp.rint(state.left_player_pos).astype(int), 
-                                self._cached_consts.kick_total_range, self._render_settings.ball_color),
-            lambda: image
-        )
-        
-        image = jax.lax.cond(right_player_kicking, 
-            lambda: draw_circle(image, *jnp.rint(state.right_player_pos).astype(int), 
-                                self._cached_consts.kick_total_range, self._render_settings.ball_color),
-            lambda: image
-        )
+    def render(self, state: State, left_player_kicking=None, right_player_kicking=None) -> chex.Array:
+        if left_player_kicking is None: left_player_kicking = jnp.zeros(self._settings.players_per_team, dtype=jnp.int8)
+        if right_player_kicking is None: right_player_kicking = jnp.zeros(self._settings.players_per_team, dtype=jnp.int8)
 
-        # players
-        image = draw_circle(image, *jnp.rint(state.left_player_pos).astype(int), 
-                            self._settings.player_radius, self._render_settings.left_team_color)
-        image = draw_circle(image, *jnp.rint(state.right_player_pos).astype(int), 
-                            self._settings.player_radius, self._render_settings.right_team_color)
+        image = self._cached_background_image
+
+        for i in range(self._settings.players_per_team):
+            # white outline when a player is kicking, size of kick range
+            image = jax.lax.cond(left_player_kicking[i], 
+                lambda: draw_circle(image, *jnp.rint(state.left_player_pos[i]).astype(int), 
+                                    self._cached_consts.kick_total_range, self._render_settings.ball_color),
+                lambda: image
+            )
+        
+            image = jax.lax.cond(right_player_kicking[i], 
+                lambda: draw_circle(image, *jnp.rint(state.right_player_pos[i]).astype(int), 
+                                    self._cached_consts.kick_total_range, self._render_settings.ball_color),
+                lambda: image
+            )
+
+            # players
+            image = draw_circle(image, *jnp.rint(state.left_player_pos[i]).astype(int), 
+                                self._settings.player_radius, self._render_settings.left_team_color)
+            image = draw_circle(image, *jnp.rint(state.right_player_pos[i]).astype(int), 
+                                self._settings.player_radius, self._render_settings.right_team_color)
 
         # ball
         image = draw_circle(image, *jnp.rint(state.ball_pos).astype(int), 
