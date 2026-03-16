@@ -5,7 +5,7 @@ import jax
 import functools
 import dataclasses
 
-from utils import draw_circle, coll_time_moving_circle_circle, \
+from .utils import draw_circle, coll_time_moving_circle_circle, \
     coll_time_line_moving_circle, closest_point_on_line
 
 @dataclass(frozen=True)
@@ -188,7 +188,7 @@ class FootballGame:
             right_player_vel=jnp.zeros((self._settings.players_per_team, 2), dtype=jnp.float32),
 
             ball_pos=self._cached_consts.ball_start_pos,
-            ball_vel=jnp.array((0,0))#FootballGame.ZERO_VECTOR,
+            ball_vel=FootballGame.ZERO_VECTOR,
         )
 
         # TODO: clipping issue; most easily recreatable from the perfectly aligned starting x-positions
